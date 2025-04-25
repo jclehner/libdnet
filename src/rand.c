@@ -12,9 +12,6 @@
 #include "config.h"
 
 #ifdef _WIN32
-/* XXX */
-# undef _WIN32_WINNT
-# define _WIN32_WINNT 0x0400
 # include <wincrypt.h>
 # define inline __inline
 #else

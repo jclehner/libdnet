@@ -22,8 +22,14 @@ foreach (header stdio.h stdlib.h string.h inttypes.h)
   check_include_file(${header} ${var})
 endforeach ()
 
+if(MSVC)
+    string(REGEX REPLACE "/W[1-3]" "/W4" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+else()
+    add_compile_options(-Wall)
+endif()
+
 if (WIN32)
-    add_definitions(-DWIN32_LEAN_AND_MEAN)
+    add_definitions(-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0600)
     check_include_file(winsock2.h HAVE_WINSOCK2_H)
     set(HAVE_LIBWS2_32 ${HAVE_WINSOCK2_H})
     check_c_source_compiles("
