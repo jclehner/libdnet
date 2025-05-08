@@ -75,6 +75,8 @@ print_intf(const struct intf_entry *entry, void *arg)
 		printf(" mtu %d", entry->intf_mtu);
 
 	printf("\n");
+
+	printf("\tindex %u\n", entry->intf_index);
 	
 	if (entry->intf_addr.addr_type == ADDR_TYPE_IP) {
 		if (entry->intf_dst_addr.addr_type == ADDR_TYPE_IP) {

@@ -406,9 +406,18 @@ static int
 _intf_get_noalias(intf_t *intf, struct intf_entry *entry)
 {
 	struct ifreq ifr;
+	char name[IF_NAMESIZE];
+
+	if (entry->intf_name[0]) {
+		entry->intf_index = if_nametoindex(entry->intf_name);
+	} else if (if_indextoname(entry->intf_index, name)) {
+		strlcpy(entry->intf_name, name, sizeof(entry->intf_name));
+	} else {
+		return (-1);
+	}
 
 	strlcpy(ifr.ifr_name, entry->intf_name, sizeof(ifr.ifr_name));
-	
+
 	/* Get interface flags. */
 	if (ioctl(intf->fd, SIOCGIFFLAGS, &ifr) < 0)
 		return (-1);

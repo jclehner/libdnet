@@ -106,6 +106,8 @@ _ifrow_to_entry(intf_t *intf, MIB_IFROW *ifrow, struct intf_entry *entry)
 	/* Restore the length. */
 	entry->intf_len = intf_len;
 
+	entry->intf_index = ifrow->dwIndex;
+
 	for (i = 0; i < intf->ifcombo[ifrow->dwType].cnt; i++) {
 		if (intf->ifcombo[ifrow->dwType].idx[i] == ifrow->dwIndex)
 			break;
@@ -232,9 +234,13 @@ intf_get(intf_t *intf, struct intf_entry *entry)
 	
 	if (_refresh_tables(intf) < 0)
 		return (-1);
-	
-	ifrow.dwIndex = _find_ifindex(intf, entry->intf_name);
-	
+
+	if (entry->intf_name[0]) {
+		ifrow.dwIndex = _find_ifindex(intf, entry->intf_name);
+	} else {
+		ifrow.dwIndex = entry->intf_index;
+	}
+
 	if (GetIfEntry(&ifrow) != NO_ERROR)
 		return (-1);
 

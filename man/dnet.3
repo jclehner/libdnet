@@ -591,8 +591,15 @@ configuration.
 .Fn intf_get
 retrieves an interface configuration
 .Fa entry ,
-keyed on
-.Fa intf_name .
+keyed on either
+.Fa intf_name ,
+or
+.Fa intf_index .
+If both are specified, only
+.Fa intf_name
+is used, while
+.Fa intf_index
+will be overwritten.
 For all
 .Fn intf_get
 functions,
