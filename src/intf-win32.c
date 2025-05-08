@@ -113,7 +113,7 @@ _ifrow_to_entry(intf_t *intf, MIB_IFROW *ifrow, struct intf_entry *entry)
 			break;
 	}
 	/* XXX - dwType matches MIB-II ifType. */
-	snprintf(entry->intf_name, sizeof(entry->intf_name), "%s%lu",
+	snprintf(entry->intf_name, sizeof(entry->intf_name), "%s%d",
 	    _ifcombo_name(ifrow->dwType), i);
 	entry->intf_type = (uint16_t)ifrow->dwType;
 	
