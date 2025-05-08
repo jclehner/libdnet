@@ -23,8 +23,9 @@ AM_MAINTAINER_MODE
 dnl Check for system type.
 AC_CANONICAL_HOST
 case "$host_os" in
-  *cygwin*) CYGWIN=yes;;
-         *) CYGWIN=no;;
+  *cygwin*) CYGWIN=yes; WINDOWS=yes;;
+   *mingw*) CYGWIN=no; WINDOWS=yes;;
+         *) CYGWIN=no; WINDOWS=no;;
 esac
 
 dnl Initialize prefix.
@@ -93,19 +94,20 @@ if test -r /usr/include/sgidefs.h ; then
 	CPPFLAGS="$CPPFLAGS -D__sgi"
 fi
 dnl XXX - we need MingW32 under Cygwin for win32
-if test "$CYGWIN" = yes ; then
-	if test -d /usr/include/mingw ; then
-		CPPFLAGS="$CPPFLAGS -mno-cygwin"
-		CFLAGS="$CFLAGS -mno-cygwin"
-		AC_DEFINE(WIN32_LEAN_AND_MEAN, 1, 
-		    [Define for faster code generation.])
-		AC_CHECK_LIB(ws2_32, main)
-		AC_CHECK_LIB(iphlpapi, main)
-		AC_DEFINE(snprintf, _snprintf, 
-		    [Use MingW32's internal snprintf])
-	else
-		AC_MSG_ERROR([need MingW32 package to build under Cygwin])
+if test "$WINDOWS" = yes ; then
+	if test "$CYGWIN" = yes; then
+		if -d /usr/include/mingw ; then 
+			CPPFLAGS="$CPPFLAGS -mno-cygwin"
+			CFLAGS="$CFLAGS -mno-cygwin"
+		else
+			AC_MSG_ERROR([need MingW32 package to build under Cygwin])
+		fi
 	fi
+	AC_DEFINE(WIN32_LEAN_AND_MEAN, 1, [Define for faster code generation.])
+	AC_DEFINE(_WIN32_WINNT, 0x0600, [Target Windows >= Vista.])
+	AC_CHECK_LIB(ws2_32, main)
+	AC_CHECK_LIB(iphlpapi, main)
+	AC_DEFINE(snprintf, _snprintf, [Use MingW32's internal snprintf])
 	AC_MSG_CHECKING(for WinPcap developer's pack)
 	AC_ARG_WITH(wpdpack,
 	[  --with-wpdpack=DIR      use WinPcap developer's pack in DIR],
@@ -126,14 +128,11 @@ if test "$CYGWIN" = yes ; then
 		break;
 	     fi
 	  done
-	  if test "$have_pcap" != yes; then
-	     AC_MSG_ERROR(WinPcap developer's pack not found)
-	  fi
 	  AC_MSG_RESULT(yes) ])
 fi
 
 dnl Checks for libraries.
-if test "$CYGWIN" != yes ; then
+if test "$WINDOWS" != yes ; then
 	AC_LBL_LIBRARY_NET
 	AC_CHECK_LIB(nm, open_mib)
 fi
@@ -184,8 +183,11 @@ AS_IF([test "${enable_check}" != "no"], [
 AM_CONDITIONAL([HAVE_CHECK], [test "${have_check}" = "yes"])
 
 
-if test "$CYGWIN" = yes ; then
-	AC_CHECK_HEADERS(Iphlpapi.h winsock2.h)
+if test "$WINDOWS" = yes ; then
+	AC_CHECK_HEADERS(Iphlpapi.h iphlpapi.h winsock2.h)
+	if test "$ac_cv_header_iphlpapi_h" = yes; then
+		ac_cv_header_Iphlpapi_h=yes
+	fi
 else
 	AC_CHECK_HEADERS(fcntl.h unistd.h)
 	AC_CHECK_HEADERS(sys/bufmod.h sys/dlpi.h sys/dlpihdr.h sys/dlpi_ext.h \
@@ -231,9 +233,10 @@ fi
 dnl Checks for library functions.
 AC_FUNC_MEMCMP
 AC_REPLACE_FUNCS(err strlcat strlcpy strsep)
+AC_CHECK_FUNC(inet_pton)
 
 dnl Checks for other system-specific jonks.
-if test "$CYGWIN" != yes ; then
+if test "$WINDOWS" != yes ; then
 	AC_DNET_BSD_BPF
 	AC_DNET_LINUX_PROCFS
 	AC_DNET_LINUX_PF_PACKET
@@ -242,6 +245,8 @@ if test "$CYGWIN" != yes ; then
 	AC_DNET_IOCTL_ARP
 	AC_DNET_RAWIP_HOST_OFFLEN
 	AC_DNET_RAWIP_COOKED
+else
+	AC_DEFINE(HAVE_INET_PTON, 1, [Available on Windows >= Vista])
 fi
 
 dnl Check for arp interface.
@@ -256,7 +261,7 @@ else
 fi
 
 dnl Check for Ethernet interface.
-if test "$ac_cv_header_Iphlpapi_h" = yes ; then
+if test "$have_pcap_" = yes ; then
 	AC_LIBOBJ([eth-win32])
 elif test "$ac_cv_header_net_pfilt_h" = yes ; then
 	AC_LIBOBJ([eth-pfilt])

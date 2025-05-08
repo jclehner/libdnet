@@ -12903,8 +12903,9 @@ fi
 
 
 case "$host_os" in
-  *cygwin*) CYGWIN=yes;;
-         *) CYGWIN=no;;
+  *cygwin*) CYGWIN=yes; WINDOWS=yes;;
+   *mingw*) CYGWIN=no; WINDOWS=yes;;
+         *) CYGWIN=no; WINDOWS=no;;
 esac
 
 if test "$prefix" = "NONE"; then
@@ -13921,14 +13922,22 @@ fi
 if test -r /usr/include/sgidefs.h ; then
 	CPPFLAGS="$CPPFLAGS -D__sgi"
 fi
-if test "$CYGWIN" = yes ; then
-	if test -d /usr/include/mingw ; then
-		CPPFLAGS="$CPPFLAGS -mno-cygwin"
-		CFLAGS="$CFLAGS -mno-cygwin"
+if test "$WINDOWS" = yes ; then
+	if test "$CYGWIN" = yes; then
+		if -d /usr/include/mingw ; then
+			CPPFLAGS="$CPPFLAGS -mno-cygwin"
+			CFLAGS="$CFLAGS -mno-cygwin"
+		else
+			as_fn_error $? "need MingW32 package to build under Cygwin" "$LINENO" 5
+		fi
+	fi
 
 printf "%s\n" "#define WIN32_LEAN_AND_MEAN 1" >>confdefs.h
 
-		{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for main in -lws2_32" >&5
+
+printf "%s\n" "#define _WIN32_WINNT 0x0600" >>confdefs.h
+
+	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for main in -lws2_32" >&5
 printf %s "checking for main in -lws2_32... " >&6; }
 if test ${ac_cv_lib_ws2_32_main+y}
 then :
@@ -13970,7 +13979,7 @@ then :
 
 fi
 
-		{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for main in -liphlpapi" >&5
+	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for main in -liphlpapi" >&5
 printf %s "checking for main in -liphlpapi... " >&6; }
 if test ${ac_cv_lib_iphlpapi_main+y}
 then :
@@ -14015,9 +14024,6 @@ fi
 
 printf "%s\n" "#define snprintf _snprintf" >>confdefs.h
 
-	else
-		as_fn_error $? "need MingW32 package to build under Cygwin" "$LINENO" 5
-	fi
 	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for WinPcap developer's pack" >&5
 printf %s "checking for WinPcap developer's pack... " >&6; }
 
@@ -14043,9 +14049,6 @@ else case e in #(
 		break;
 	     fi
 	  done
-	  if test "$have_pcap" != yes; then
-	     as_fn_error $? "WinPcap developer's pack not found" "$LINENO" 5
-	  fi
 	  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }  ;;
 esac
@@ -14053,7 +14056,7 @@ fi
 
 fi
 
-if test "$CYGWIN" != yes ; then
+if test "$WINDOWS" != yes ; then
 
     # Most operating systems have gethostbyname() in the default searched
     # libraries (i.e. libc):
@@ -14715,14 +14718,14 @@ else
         _pkg_short_errors_supported=no
 fi
         if test $_pkg_short_errors_supported = yes; then
-	        CHECK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "check" 2>&1`
+                CHECK_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "check" 2>&1`
         else
-	        CHECK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "check" 2>&1`
+                CHECK_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "check" 2>&1`
         fi
-	# Put the nasty error message in config.log where it belongs
-	echo "$CHECK_PKG_ERRORS" >&5
+        # Put the nasty error message in config.log where it belongs
+        echo "$CHECK_PKG_ERRORS" >&5
 
-	as_fn_error $? "Package requirements (check) were not met:
+        as_fn_error $? "Package requirements (check) were not met:
 
 $CHECK_PKG_ERRORS
 
@@ -14735,7 +14738,7 @@ See the pkg-config man page for more details." "$LINENO" 5
 elif test $pkg_failed = untried; then
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
 printf "%s\n" "no" >&6; }
-	{ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: error: in '$ac_pwd':" >&5
+        { { printf "%s\n" "$as_me:${as_lineno-$LINENO}: error: in '$ac_pwd':" >&5
 printf "%s\n" "$as_me: error: in '$ac_pwd':" >&2;}
 as_fn_error $? "The pkg-config script could not be found or is too old.  Make sure it
 is in your PATH or set the PKG_CONFIG environment variable to the full
@@ -14748,8 +14751,8 @@ See the pkg-config man page for more details.
 To get pkg-config, see <http://pkg-config.freedesktop.org/>.
 See 'config.log' for more details" "$LINENO" 5; }
 else
-	CHECK_CFLAGS=$pkg_cv_CHECK_CFLAGS
-	CHECK_LIBS=$pkg_cv_CHECK_LIBS
+        CHECK_CFLAGS=$pkg_cv_CHECK_CFLAGS
+        CHECK_LIBS=$pkg_cv_CHECK_LIBS
         { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }
 
@@ -14782,9 +14785,15 @@ fi
 
 
 
-if test "$CYGWIN" = yes ; then
+if test "$WINDOWS" = yes ; then
 	ac_fn_c_check_header_compile "$LINENO" "Iphlpapi.h" "ac_cv_header_Iphlpapi_h" "$ac_includes_default"
 if test "x$ac_cv_header_Iphlpapi_h" = xyes
+then :
+  printf "%s\n" "#define HAVE_IPHLPAPI_H 1" >>confdefs.h
+
+fi
+ac_fn_c_check_header_compile "$LINENO" "iphlpapi.h" "ac_cv_header_iphlpapi_h" "$ac_includes_default"
+if test "x$ac_cv_header_iphlpapi_h" = xyes
 then :
   printf "%s\n" "#define HAVE_IPHLPAPI_H 1" >>confdefs.h
 
@@ -14796,6 +14805,9 @@ then :
 
 fi
 
+	if test "$ac_cv_header_iphlpapi_h" = yes; then
+		ac_cv_header_Iphlpapi_h=yes
+	fi
 else
 	ac_fn_c_check_header_compile "$LINENO" "fcntl.h" "ac_cv_header_fcntl_h" "$ac_includes_default"
 if test "x$ac_cv_header_fcntl_h" = xyes
@@ -15512,8 +15524,14 @@ esac
 esac
 fi
 
+ac_fn_c_check_func "$LINENO" "inet_pton" "ac_cv_func_inet_pton"
+if test "x$ac_cv_func_inet_pton" = xyes
+then :
 
-if test "$CYGWIN" != yes ; then
+fi
+
+
+if test "$WINDOWS" != yes ; then
 	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Berkeley Packet Filter" >&5
 printf %s "checking for Berkeley Packet Filter... " >&6; }
     if test ${ac_cv_dnet_bsd_bpf+y}
@@ -15716,6 +15734,10 @@ printf "%s\n" "$ac_cv_dnet_rawip_cooked" >&6; }
 printf "%s\n" "#define HAVE_RAWIP_COOKED 1" >>confdefs.h
 
     fi
+else
+
+printf "%s\n" "#define HAVE_INET_PTON 1" >>confdefs.h
+
 fi
 
 if test "$ac_cv_header_Iphlpapi_h" = yes ; then
@@ -15748,7 +15770,7 @@ esac
 
 fi
 
-if test "$ac_cv_header_Iphlpapi_h" = yes ; then
+if test "$have_pcap_" = yes ; then
 	case " $LIBOBJS " in
   *" eth-win32.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS eth-win32.$ac_objext"
