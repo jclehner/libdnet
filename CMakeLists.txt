@@ -323,6 +323,7 @@ set_target_properties(
     ${PROJECT_NAME}
     PROPERTIES
     PUBLIC_HEADER "${DNET_HEADERS}"
+    SOVERSION 2.0.0 # keep in sync with src/Makefile.am!
 )
 
 if (WIN32)
