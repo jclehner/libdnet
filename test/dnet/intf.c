@@ -26,7 +26,7 @@ static void
 usage(void)
 {
 	fprintf(stderr, "Usage: dnet intf show\n"
-	    "       dnet intf get <name>\n"
+	    "       dnet intf get [<name>|<index>]\n"
 	    "       dnet intf set <name> "
 	    "[alias|dst|inet|link <addr> ...] [up|down|arp|noarp ...]\n"
 	    "       dnet intf src <ip>\n"
@@ -120,7 +120,11 @@ intf_main(int argc, char *argv[])
 	} else if (strcmp(cmd, "get") == 0) {
 		if (argc < 3)
 			usage();
-		strlcpy(entry->intf_name, argv[2], sizeof(entry->intf_name));
+		if (isdigit(argv[2][0])) {
+			entry->intf_index = atoi(argv[2]);
+		} else {
+			strlcpy(entry->intf_name, argv[2], sizeof(entry->intf_name));
+		}
 		if (intf_get(intf, entry) < 0)
 			err(1, "intf_get");
 		print_intf(entry, NULL);
