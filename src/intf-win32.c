@@ -7,9 +7,11 @@
 
 #include "config.h"
 
+#include <ws2tcpip.h>
 #include <netioapi.h>
 #include <iphlpapi.h>
 
+#include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -32,6 +34,19 @@ struct intf_handle {
 	MIB_IF_TABLE2 *table;
 	MIB_UNICASTIPADDRESS_TABLE *addrs;
 };
+
+static const char* sai_ntop(SOCKADDR_INET *addr)
+{
+	static char buf[64];
+
+	if (addr->si_family == AF_INET) {
+		return inet_ntop(AF_INET, &addr->Ipv4.sin_addr, buf, sizeof(buf));
+	} else if (addr->si_family == AF_INET6) {
+		return inet_ntop(AF_INET6, &addr->Ipv6.sin6_addr, buf, sizeof(buf));
+	}
+
+	return NULL;
+}
 
 static char *
 _ifcombo_name(int type)
@@ -75,13 +90,17 @@ static int _addr_to_unicastaddr(const struct addr *addr, NET_IFINDEX index, MIB_
 	_set_ifindex(index, iprow);
 
 	iprow->OnLinkPrefixLength = addr->addr_bits;
-	iprow->PreferredLifetime = ULONG_MAX;
-	iprow->ValidLifetime = ULONG_MAX;
+	iprow->PreferredLifetime = 0xffffffff;
+	iprow->ValidLifetime = 0xffffffff;
+	iprow->PrefixOrigin = IpPrefixOriginManual;
+	iprow->SuffixOrigin = IpSuffixOriginManual;
 
 	if (addr->addr_type == ADDR_TYPE_IP) {
 		return addr_ntos(addr, (struct sockaddr *)&iprow->Address.Ipv4);
+		iprow->Address.si_family = AF_INET;
 	} else if (addr->addr_type == ADDR_TYPE_IP6) {
 		return addr_ntos(addr, (struct sockaddr *)&iprow->Address.Ipv6);
+		iprow->Address.si_family = AF_INET6;
 	} else {
 		return (-1);
 	}
@@ -203,23 +222,24 @@ _ifindex_to_entry(intf_t *intf, NET_IFINDEX index, struct intf_entry *entry)
 	MIB_IF_ROW2 ifrow;
 
 	_set_ifindex(index, &ifrow);
-
 	if (GetIfEntry2(&ifrow) != NO_ERROR) {
 		return (-1);
 	}
 
 	_ifrow2_to_entry(intf, &ifrow, entry);
-
 	return (0);
 }
 
 int
-_entry_to_ipinterface(intf_t *intf, const struct intf_entry *entry, MIB_IPINTERFACE_ROW *row)
+_entry_to_ipinterface(intf_t *intf, int af, const struct intf_entry *entry, MIB_IPINTERFACE_ROW *row)
 {
   NET_IFINDEX index = _find_ifindex(intf, entry->intf_name);
 
 	_set_ifindex(index, row);
+	row->Family = af;
+
 	if (GetIpInterfaceEntry(row) != NO_ERROR) {
+		printf("GetIpInterfaceEntry\n");
 		return (-1);
 	}
 
@@ -229,14 +249,17 @@ _entry_to_ipinterface(intf_t *intf, const struct intf_entry *entry, MIB_IPINTERF
 int
 _intf_delete_unicast_addrs(intf_t *intf, NET_IFINDEX index)
 {
-	MIB_UNICASTIPADDRESS_ROW *addr;
+	MIB_UNICASTIPADDRESS_ROW *row;
 	ULONG i;
 
 	for (i = 0; i < intf->addrs->NumEntries; ++i) {
-		addr = &intf->addrs->Table[i];
+		row = &intf->addrs->Table[i];
 
-		if (addr->InterfaceIndex == index) {
-			DeleteUnicastIpAddressEntry(addr);
+		if (row->InterfaceIndex == index) {
+			if (DeleteUnicastIpAddressEntry(row) != NO_ERROR) {
+				printf("%s: DeleteUnicastIpAddressEntry\n", __func__);
+				return (-1);
+			}
 		}
 	}
 
@@ -247,10 +270,18 @@ static int
 _intf_add_unicast_addr(intf_t *intf, NET_IFINDEX index, const struct addr *addr)
 {
 	MIB_UNICASTIPADDRESS_ROW addrrow;
+	DWORD err;
 
-	_addr_to_unicastaddr(addr, index, &addrrow);
-	if (CreateUnicastIpAddressEntry(&addrrow) != NO_ERROR) {
-		return (-1);
+	if (addr->addr_type != ADDR_TYPE_NONE) {
+		if (_addr_to_unicastaddr(addr, index, &addrrow) < 0) {
+			return (-1);
+		}
+		err = CreateUnicastIpAddressEntry(&addrrow);
+
+		if (err != NO_ERROR) {
+			printf("%s: CreateUnicastIpAddressEntry: %lu\n", __func__, err);
+			return (-1);
+		}
 	}
 
 	return (0);
@@ -262,45 +293,49 @@ _intf_add_unicast_addrs(intf_t *intf, const struct intf_entry *entry)
 	MIB_IPINTERFACE_ROW intfrow;
 	ULONG dad_transmits_orig;
 	const struct addr *addr;
-	u_int i;
+	u_int i, j;
 	int ret;
 
-	if (_entry_to_ipinterface(intf, entry, &intfrow) < 0) {
-		return (-1);
-	}
-
-	/* The address added by CreateUnicastIpAddressEntry isn't immediately
-	 * available for use, due to Windows' Duplicate Address Detection (DAD),
-	 * which uses ARP to check if an address is claimed by another device.
-	 *
-	 * The docs recommend pausing "for one to three seconds" (!) after calling
-	 * CreateUnicastIpAddressEntry, before checking the DAD status[1]. This
-	 * is unacceptably long, so we temporarily disable DAD by setting
-	 * DadTransmits to 0 (ignoring potential errors from SetIpInterfaceEntry).
-	 *
-	 * [1] https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createunicastipaddressentry
-	 */
-
-	dad_transmits_orig = intfrow.DadTransmits;
-
-	intfrow.DadTransmits = 0;
-	SetIpInterfaceEntry(&intfrow);
-
-	ret = 0;
-	i = 0;
-	addr = &entry->intf_addr;
-
-	do {
-		if (_intf_add_unicast_addr(intf, intfrow.InterfaceIndex, addr) < 0) {
-			ret = -1;
-			break;
+	for (i = 0; i < 2; ++i) {
+		if (_entry_to_ipinterface(intf, i ? AF_INET6 : AF_INET, entry, &intfrow) < 0) {
+			return (-1);
 		}
 
-		addr = &entry->intf_alias_addrs[i];
-	} while (i++ < entry->intf_alias_num);
+		/* The address added by CreateUnicastIpAddressEntry isn't immediately
+		 * available for use, due to Windows' Duplicate Address Detection (DAD),
+		 * which uses ARP to check if an address is claimed by another device.
+		 *
+		 * The docs recommend pausing "for one to three seconds" (!) after calling
+		 * CreateUnicastIpAddressEntry, before checking the DAD status[1]. This
+		 * is unacceptably long, so we temporarily disable DAD by setting
+		 * DadTransmits to 0 (ignoring potential errors from SetIpInterfaceEntry).
+		 *
+		 * [1] https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createunicastipaddressentry
+		 */
 
-	intfrow.DadTransmits = dad_transmits_orig;
-	SetIpInterfaceEntry(&intfrow);
+		dad_transmits_orig = intfrow.DadTransmits;
+
+		intfrow.DadTransmits = 0;
+		SetIpInterfaceEntry(&intfrow);
+
+		ret = 0;
+		j = 0;
+		addr = &entry->intf_addr;
+
+		do {
+			if (addr->addr_type == (i ? ADDR_TYPE_IP6 : ADDR_TYPE_IP)) {
+				if (_intf_add_unicast_addr(intf, intfrow.InterfaceIndex, addr) < 0) {
+					ret = -1;
+					break;
+				}
+			}
+
+			addr = &entry->intf_alias_addrs[j];
+		} while (j++ < entry->intf_alias_num);
+
+		intfrow.DadTransmits = dad_transmits_orig;
+		SetIpInterfaceEntry(&intfrow);
+	}
 
 	return (ret);
 }
@@ -359,11 +394,13 @@ intf_get_dst(intf_t *intf, struct intf_entry *entry, struct addr *dst)
 int
 intf_set(intf_t *intf, const struct intf_entry *entry)
 {
+	struct intf_entry orig;
 	const struct addr *addr;
 	MIB_IPINTERFACE_ROW iprow;
 	MIB_IFROW ifrow1;
 	MIB_IF_ROW2 ifrow2;
 	NET_IFINDEX index;
+	int i;
 
 	if (_refresh_tables(intf) < 0) {
 		return (-1);
@@ -371,6 +408,10 @@ intf_set(intf_t *intf, const struct intf_entry *entry)
 
 	index = _find_ifindex(intf, entry->intf_name);
 	if (!index) {
+		return (-1);
+	}
+
+	if (_ifindex_to_entry(intf, index, &orig) < 0) {
 		return (-1);
 	}
 
@@ -386,30 +427,41 @@ intf_set(intf_t *intf, const struct intf_entry *entry)
 
 	/* Begin Get/SetIpInterfaceEntry */
 
-	_set_ifindex(index, &iprow);
-	if (GetIpInterfaceEntry(&iprow) != NO_ERROR) {
-		return (-1);
-	}
+	/* MTU can be set separately for ipv4 and ipv6! */
 
-	/* Set interface MTU. */
-	if (entry->intf_mtu != 0) {
-		iprow.NlMtu = entry->intf_mtu;
-	}
+	for (i = 0; i < 2; ++i) {
+		_set_ifindex(index, &iprow);
+		iprow.Family = i ? AF_INET6 : AF_INET;
 
-	if (SetIpInterfaceEntry(&iprow) != NO_ERROR) {
-		return (-1);
+		if (GetIpInterfaceEntry(&iprow) != NO_ERROR) {
+			printf("%s: GetIpInterfaceEntry\n", __func__);
+			return (-1);
+		}
+
+		/* Set interface MTU. */
+		if (entry->intf_mtu != 0) {
+			iprow.NlMtu = entry->intf_mtu;
+		}
+
+		if (SetIpInterfaceEntry(&iprow) != NO_ERROR) {
+			printf("%s: SetIpInterfaceEntry\n", __func__);
+			return (-1);
+		}
 	}
 
 	/* End Get/SetIpInterfaceEntry */
 
 	_set_ifindex(index, &ifrow2);
 	if (GetIfEntry2(&ifrow2) != NO_ERROR) {
+		printf("%s: GetIfEntry2\n", __func__);
 		return (-1);
 	}
 
 	/* Set hardware address. */
-	if (entry->intf_link_addr.addr_type == ADDR_TYPE_ETH) {
-		if (memcmp(&addr->addr_eth, &ifrow2.PhysicalAddress, ETH_ADDR_LEN) != 0) {
+	addr = &entry->intf_link_addr;
+
+	if (addr->addr_type == ADDR_TYPE_ETH) {
+		if (memcmp(&addr->addr_eth, &orig.intf_link_addr.addr_eth, ETH_ADDR_LEN) != 0) {
 			/* XXX - not yet implemented. We'd have to modify the registry for that */
 			errno = ENOSYS;
 			SetLastError(ERROR_NOT_SUPPORTED);
@@ -436,6 +488,7 @@ intf_set(intf_t *intf, const struct intf_entry *entry)
 	}
 
 	if (SetIfEntry(&ifrow1) != NO_ERROR) {
+		printf("  SetIfEntry\n");
 		return (-1);
 	}
 
