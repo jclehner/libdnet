@@ -21,6 +21,10 @@
 #ifdef HAVE_NET_RAW_H
 # include <net/raw.h>
 #endif
+#ifdef HAVE_WINSOCK2_H
+# include <ws2ipdef.h>
+# define HAVE_SOCKADDR_IN6
+#endif
 
 #include <ctype.h>
 #include <errno.h>
