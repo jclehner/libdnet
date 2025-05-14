@@ -77,7 +77,7 @@ print_intf(const struct intf_entry *entry, void *arg)
 
 	printf("\n");
 
-	printf("\tindex %u\n", entry->intf_index);
+	printf("\tindex %u type %hu\n", entry->intf_index, entry->intf_type);
 	
 	if (entry->intf_addr.addr_type == ADDR_TYPE_IP) {
 		if (entry->intf_dst_addr.addr_type == ADDR_TYPE_IP) {
