@@ -805,7 +805,7 @@ with_sysroot
 enable_libtool_lock
 enable_maintainer_mode
 with_python
-with_wpdpack
+with_npcap
 enable_check
 with_check
 '
@@ -1478,7 +1478,7 @@ Optional Packages:
   --with-sysroot[=DIR]    Search for dependent libraries within DIR (or the
                           compiler's sysroot if not specified).
   --with-python=DIR       build Python module (using python in DIR)
-  --with-wpdpack=DIR      use WinPcap developer's pack in DIR
+  --with-npcap=DIR        use Npcap SDK in DIR
   --with-check=DIR        use Check (https://libcheck.github.io/check/) in DIR
 
 Some influential environment variables:
@@ -13932,6 +13932,13 @@ if test "$WINDOWS" = yes ; then
 		fi
 	fi
 
+	case "$build_cpu" in
+		x86_64)  NPCAP_LIB_DIR="Lib/x64";;
+		aarch64) NPCAP_LIB_DIR="Lib/ARM64";;
+		*)       NPCAP_LIB_DIR="Lib";;
+	esac
+
+
 printf "%s\n" "#define WIN32_LEAN_AND_MEAN 1" >>confdefs.h
 
 
@@ -14021,36 +14028,34 @@ then :
 
 fi
 
+	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for Npcap SDK" >&5
+printf %s "checking for Npcap SDK... " >&6; }
 
-printf "%s\n" "#define snprintf _snprintf" >>confdefs.h
-
-	{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for WinPcap developer's pack" >&5
-printf %s "checking for WinPcap developer's pack... " >&6; }
-
-# Check whether --with-wpdpack was given.
-if test ${with_wpdpack+y}
+# Check whether --with-npcap was given.
+if test ${with_npcap+y}
 then :
-  withval=$with_wpdpack;  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $withval" >&5
+  withval=$with_npcap;  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $withval" >&5
 printf "%s\n" "$withval" >&6; }
-	  if test -f $withval/include/packet32.h -a -f $withval/lib/packet.lib; then
+	  if test -f $withval/Include/Packet32.h -a -f $withval/$NPCAP_LIB_DIR/Packet.lib; then
 	     owd=`pwd`
 	     if cd $withval; then withval=`pwd`; cd $owd; fi
-	     CFLAGS="$CFLAGS -I$withval/include"
-	     LIBS="$LIBS -L$withval/lib -lpacket"
+	     CFLAGS="$CFLAGS -I$withval/Include"
+	     LIBS="$LIBS -L$withval/$NPCAP_LIB_DIR -lPacket"
+		 have_npcap=yes
 	  else
-	     as_fn_error $? "packet32.h or packet.lib not found in $withval" "$LINENO" 5
+	     as_fn_error $? "Packet32.h or Packet.lib not found in $withval" "$LINENO" 5
 	  fi
 else case e in #(
-  e)  for dir in ${prefix} ${HOME}/WPdpack ; do
-	     if test -f ${dir}/include/packet32.h -a -f ${dir}/lib/packet.lib; then
-	        CFLAGS="$CFLAGS -I${dir}/include"
-		LIBS="$LIBS -L${dir}/lib -lpacket"
-		have_pcap=yes
-		break;
-	     fi
-	  done
-	  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-printf "%s\n" "yes" >&6; }  ;;
+  e)
+	  if test -f ${prefix}/include/Packet32.h -a -f ${prefix}/lib/Packet.lib; then
+		 have_npcap=yes
+		 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+	  else
+		 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+	  fi
+	 ;;
 esac
 fi
 
@@ -15770,7 +15775,7 @@ esac
 
 fi
 
-if test "$have_pcap_" = yes ; then
+if test "$have_npcap" = yes ; then
 	case " $LIBOBJS " in
   *" eth-win32.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS eth-win32.$ac_objext"

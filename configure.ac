@@ -103,31 +103,38 @@ if test "$WINDOWS" = yes ; then
 			AC_MSG_ERROR([need MingW32 package to build under Cygwin])
 		fi
 	fi
+
+	case "$build_cpu" in
+		x86_64)  NPCAP_LIB_DIR="Lib/x64";;
+		aarch64) NPCAP_LIB_DIR="Lib/ARM64";;
+		*)       NPCAP_LIB_DIR="Lib";;
+	esac
+
 	AC_DEFINE(WIN32_LEAN_AND_MEAN, 1, [Define for faster code generation.])
 	AC_DEFINE(_WIN32_WINNT, 0x0600, [Target Windows >= Vista.])
 	AC_CHECK_LIB(ws2_32, main)
 	AC_CHECK_LIB(iphlpapi, main)
-	AC_MSG_CHECKING(for WinPcap developer's pack)
-	AC_ARG_WITH(wpdpack,
-	[  --with-wpdpack=DIR      use WinPcap developer's pack in DIR],
+	AC_MSG_CHECKING(for Npcap SDK)
+	AC_ARG_WITH(npcap,
+	[  --with-npcap=DIR        use Npcap SDK in DIR],
 	[ AC_MSG_RESULT($withval)
-	  if test -f $withval/include/packet32.h -a -f $withval/lib/packet.lib; then
+	  if test -f $withval/Include/Packet32.h -a -f $withval/$NPCAP_LIB_DIR/Packet.lib; then
 	     owd=`pwd`
 	     if cd $withval; then withval=`pwd`; cd $owd; fi
-	     CFLAGS="$CFLAGS -I$withval/include"
-	     LIBS="$LIBS -L$withval/lib -lpacket"
+	     CFLAGS="$CFLAGS -I$withval/Include"
+	     LIBS="$LIBS -L$withval/$NPCAP_LIB_DIR -lPacket"
+		 have_npcap=yes
 	  else
-	     AC_MSG_ERROR(packet32.h or packet.lib not found in $withval)
+	     AC_MSG_ERROR(Packet32.h or Packet.lib not found in $withval)
 	  fi ],
-	[ for dir in ${prefix} ${HOME}/WPdpack ; do
-	     if test -f ${dir}/include/packet32.h -a -f ${dir}/lib/packet.lib; then
-	        CFLAGS="$CFLAGS -I${dir}/include"
-		LIBS="$LIBS -L${dir}/lib -lpacket"
-		have_pcap=yes
-		break;
-	     fi
-	  done
-	  AC_MSG_RESULT(yes) ])
+	[
+	  if test -f ${prefix}/include/Packet32.h -a -f ${prefix}/lib/Packet.lib; then
+		 have_npcap=yes
+		 AC_MSG_RESULT(yes)
+	  else
+		 AC_MSG_RESULT(no)
+	  fi
+	])
 fi
 
 dnl Checks for libraries.
@@ -246,7 +253,6 @@ if test "$WINDOWS" != yes ; then
 	AC_DNET_RAWIP_COOKED
 else
 	AC_DEFINE(HAVE_INET_PTON, 1, [Available on Windows >= Vista])
-	AC_DEFINE(HAVE_SOCKADDR_IN6, 1, [Available on Windows >= Vista])
 fi
 
 dnl Check for arp interface.
@@ -261,7 +267,7 @@ else
 fi
 
 dnl Check for Ethernet interface.
-if test "$have_pcap_" = yes ; then
+if test "$have_npcap" = yes ; then
 	AC_LIBOBJ([eth-win32])
 elif test "$ac_cv_header_net_pfilt_h" = yes ; then
 	AC_LIBOBJ([eth-pfilt])
