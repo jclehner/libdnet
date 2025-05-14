@@ -276,9 +276,6 @@
 /* Define as 'unsigned int' if <stddef.h> doesn't define. */
 #undef size_t
 
-/* Use MingW32's internal snprintf */
-#undef snprintf
-
 #include <sys/types.h>
 
 #ifdef HAVE_WINSOCK2_H
