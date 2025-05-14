@@ -107,7 +107,6 @@ if test "$WINDOWS" = yes ; then
 	AC_DEFINE(_WIN32_WINNT, 0x0600, [Target Windows >= Vista.])
 	AC_CHECK_LIB(ws2_32, main)
 	AC_CHECK_LIB(iphlpapi, main)
-	AC_DEFINE(snprintf, _snprintf, [Use MingW32's internal snprintf])
 	AC_MSG_CHECKING(for WinPcap developer's pack)
 	AC_ARG_WITH(wpdpack,
 	[  --with-wpdpack=DIR      use WinPcap developer's pack in DIR],
@@ -247,6 +246,7 @@ if test "$WINDOWS" != yes ; then
 	AC_DNET_RAWIP_COOKED
 else
 	AC_DEFINE(HAVE_INET_PTON, 1, [Available on Windows >= Vista])
+	AC_DEFINE(HAVE_SOCKADDR_IN6, 1, [Available on Windows >= Vista])
 fi
 
 dnl Check for arp interface.

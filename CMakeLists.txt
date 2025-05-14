@@ -23,7 +23,8 @@ foreach (header stdio.h stdlib.h string.h inttypes.h)
 endforeach ()
 
 if (WIN32)
-    add_definitions(-DWIN32_LEAN_AND_MEAN)
+    add_definitions(-DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0600)
+    set(HAVE_SOCKADDR_IN6 )
     check_include_file(winsock2.h HAVE_WINSOCK2_H)
     set(HAVE_LIBWS2_32 ${HAVE_WINSOCK2_H})
     check_c_source_compiles("
