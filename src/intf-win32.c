@@ -49,48 +49,66 @@ _set_error(int err, DWORD winerr)
 	SetLastError(winerr);
 }
 
-static char *
-_ifcombo_name(int type)
+static u_short
+_ifcombo_mapped_type(ULONG type)
 {
-	char *name = "eth";	/* XXX */
-	
-	if (type == MIB_IF_TYPE_TOKENRING) {
-		name = "tr";
-	} else if (type == MIB_IF_TYPE_FDDI) {
-		name = "fddi";
-	} else if (type == MIB_IF_TYPE_PPP) {
-		name = "ppp";
-	} else if (type == MIB_IF_TYPE_LOOPBACK) {
-		name = "lo";
-	} else if (type == MIB_IF_TYPE_SLIP) {
-		name = "sl";
-	} else if (type == MIB_IF_TYPE_TUNNEL) {
-		name = "tun";
+	if (type < MIB_IF_TYPE_MAX) {
+		switch (type) {
+			case IF_TYPE_IEEE80211:
+			case IF_TYPE_ETHERNET_CSMACD:
+				return INTF_TYPE_ETH;
+			case IF_TYPE_TUNNEL:
+				return INTF_TYPE_TUN;
+			case IF_TYPE_ISO88025_TOKENRING:
+			case IF_TYPE_FDDI:
+			case IF_TYPE_PPP:
+			case IF_TYPE_SOFTWARE_LOOPBACK:
+			case IF_TYPE_SLIP:
+				return type;
+		}
 	}
-	return (name);
+
+	return INTF_TYPE_OTHER;
 }
 
-static int
+const char* _ifcombo_prefixes[MIB_IF_TYPE_MAX] = {
+	[INTF_TYPE_ETH] = "eth",
+	[INTF_TYPE_FDDI] = "fddi",
+	[INTF_TYPE_LOOPBACK] = "lo",
+	[INTF_TYPE_OTHER] = "intf",
+	[INTF_TYPE_PPP] = "ppp",
+	[INTF_TYPE_SLIP] = "sl",
+	[INTF_TYPE_TOKENRING] = "tr",
+	[INTF_TYPE_TUN] = "tun",
+};
+
+static const char *
+_ifcombo_name(u_short type)
+{
+	if (type < MIB_IF_TYPE_MAX) {
+		const char* ret = _ifcombo_prefixes[type];
+		if (ret) {
+			return ret;
+		}
+	}
+
+	return _ifcombo_prefixes[INTF_TYPE_OTHER];
+}
+
+static u_short
 _ifcombo_type(const char *device)
 {
-	int type = INTF_TYPE_OTHER;
-	
-	if (strncmp(device, "eth", 3) == 0) {
-		type = INTF_TYPE_ETH;
-	} else if (strncmp(device, "tr", 2) == 0) {
-		type = INTF_TYPE_TOKENRING;
-	} else if (strncmp(device, "fd", 2) == 0) {
-		type = INTF_TYPE_FDDI;
-	} else if (strncmp(device, "ppp", 3) == 0) {
-		type = INTF_TYPE_PPP;
-	} else if (strncmp(device, "lo", 2) == 0) {
-		type = INTF_TYPE_LOOPBACK;
-	} else if (strncmp(device, "sl", 2) == 0) {
-		type = INTF_TYPE_SLIP;
-	} else if (strncmp(device, "tun", 3) == 0) {
-		type = INTF_TYPE_TUN;
+	const char* p;
+	u_short type;
+
+	for (type = 0; type < MIB_IF_TYPE_MAX; ++type) {
+		p = _ifcombo_prefixes[type];
+		if (p && strncmp(device, p, strlen(p)) == 0) {
+			return type;
+		}
 	}
-	return (type);
+
+	return INTF_TYPE_OTHER;
 }
 
 static void
@@ -184,14 +202,17 @@ _ifrow2_to_entry(intf_t* intf, MIB_IF_ROW2* ifrow, struct intf_entry* entry)
 	/* Restore the length. */
 	entry->intf_len = intf_len;
 
-	for (i = 0; i < intf->ifcombo[ifrow->Type].cnt; i++) {
-		if (intf->ifcombo[ifrow->Type].idx[i] == ifrow->InterfaceIndex)
+	/* XXX - Type matches MIB-II ifType. */
+	entry->intf_type = _ifcombo_mapped_type(ifrow->Type);
+
+	for (i = 0; i < intf->ifcombo[entry->intf_type].cnt; i++) {
+		if (intf->ifcombo[entry->intf_type].idx[i] == ifrow->InterfaceIndex)
 			break;
 	}
-	/* XXX - Type matches MIB-II ifType. */
+
 	snprintf(entry->intf_name, sizeof(entry->intf_name), "%s%lu",
-		_ifcombo_name(ifrow->Type), i);
-	entry->intf_type = ifrow->Type;
+		_ifcombo_name(entry->intf_type), i);
+
 	entry->intf_index = ifrow->InterfaceIndex;
 
 	/* Get interface flags. */
@@ -259,7 +280,7 @@ _free_tables(intf_t* intf)
 static int
 _refresh_tables(intf_t* intf)
 {
-	MIB_IF_ROW2* ifrow;
+	MIB_IF_ROW2* row;
 	ULONG i;
 
 	_free_tables(intf);
@@ -271,10 +292,10 @@ _refresh_tables(intf_t* intf)
 	}
 
 	for (i = 0; i < intf->iftable->NumEntries; i++) {
-		ifrow = &intf->iftable->Table[i];
-		if (ifrow->Type < MIB_IF_TYPE_MAX) {
-			_ifcombo_add(&intf->ifcombo[ifrow->Type],
-				ifrow->InterfaceIndex);
+		row = &intf->iftable->Table[i];
+		if (row->Type < MIB_IF_TYPE_MAX) {
+			_ifcombo_add(&intf->ifcombo[_ifcombo_mapped_type(row->Type)],
+				row->InterfaceIndex);
 		}
 		else
 			return (-1);
