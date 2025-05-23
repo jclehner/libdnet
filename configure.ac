@@ -114,6 +114,9 @@ if test "$WINDOWS" = yes ; then
 	AC_DEFINE(_WIN32_WINNT, 0x0600, [Target Windows >= Vista.])
 	AC_CHECK_LIB(ws2_32, main)
 	AC_CHECK_LIB(iphlpapi, main)
+	AC_CHECK_LIB(ole32, main)
+	AC_CHECK_LIB(oleaut32, main)
+	AC_CHECK_LIB(wbemuuid, main)
 	AC_MSG_CHECKING(for Npcap SDK)
 	AC_ARG_WITH(npcap,
 	[  --with-npcap=DIR        use Npcap SDK in DIR],

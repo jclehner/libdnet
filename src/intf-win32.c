@@ -11,6 +11,7 @@
 
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
+#include <wbemidl.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -19,6 +20,8 @@
 #include <string.h>
 
 #include "dnet.h"
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 struct ifcombo {
 	NET_IFINDEX *idx;
@@ -127,8 +130,240 @@ _ifcombo_add(struct ifcombo *ifc, NET_IFINDEX idx)
 	ifc->idx[ifc->cnt++] = idx;
 }
 
+static char*
+_intf_get_guid_str(NET_IFINDEX index, char* str, size_t len)
+{
+	GUID guid;
+	NET_LUID luid;
+
+	if (ConvertInterfaceIndexToLuid(index, &luid) != NO_ERROR) {
+		fprintf(stderr, "%s: ConvertInterfaceIndexToLuid\n", __func__);
+		return NULL;
+	}
+
+	if (ConvertInterfaceLuidToGuid(&luid, &guid) != NO_ERROR) {
+		fprintf(stderr, "%s: ConvertInterfaceLuidToGuid\n", __func__);
+		return NULL;
+	}
+
+	snprintf(str, len,
+		"{%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+		guid.Data1, guid.Data2, guid.Data3,
+		guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3],
+		guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
+
+	return str;
+}
+
+static wchar_t*
+_intf_get_guid_wcs(NET_IFINDEX index, wchar_t* wcs, size_t len)
+{
+	char str[39];
+	size_t converted;
+
+	if (!_intf_get_guid_str(index, str, sizeof(str))) {
+		return NULL;
+	}
+
+	if (mbstowcs_s(&converted, wcs, len, str, sizeof(str)) != 0) {
+		return NULL;
+	}
+
+	return wcs;
+}
+
 static int
-_intf_loop_ipaddrs(const struct intf_entry* entry, int (*callback)(const struct addr*, u_int))
+_intf_set_link_addr(NET_IFINDEX index, const eth_addr_t* addr)
+{
+	char guid[39];
+	char subkey[64];
+	char buf[64];
+	HKEY hkey;
+	DWORD i, len, err;
+	BOOL match;
+
+	if (!_intf_get_guid_str(index, guid, sizeof(guid))) {
+		return (-1);
+	}
+
+	err = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+		"System\\CurrentControlSet\\Control\\Class\\{4d36e972-e325-11ce-bfc1-08002be10318}",
+		0, KEY_SET_VALUE | KEY_ENUMERATE_SUB_KEYS, &hkey);
+
+	if (err) {
+		printf("  RegOpenKeyExA: %lu\n", err);
+		return (-1);
+	}
+
+	match = FALSE;
+
+	for (i = 0; !match; ++i) {
+		len = sizeof(subkey);
+		err = RegEnumKeyExA(hkey, i, subkey, &len, NULL, NULL, NULL, NULL);
+		if (err == ERROR_NO_MORE_ITEMS) {
+			break;
+		} else if (err == ERROR_MORE_DATA) {
+			/* The subkeys we expect are a 4-digit decimal number (e.g. 0018),
+			   so sizeof(subkey) should be plenty. */
+			continue;
+		} else if (err) {
+			printf("  RegEnumKeyExA: %lu\n", err);
+			break;
+		}
+
+		len = sizeof(buf);
+		err = RegGetValueA(hkey, subkey, "NetCfgInstanceId", RRF_RT_REG_SZ, NULL, buf, &len);
+		if (err) {
+			printf("  RegGetValueA: %lu\n", err);
+			break;
+		}
+
+		if (!err && strcasecmp(buf, guid) == 0) {
+			match = TRUE;
+			snprintf(buf, sizeof(buf), "%02x%02x%02x%02x%02x%02x",
+				addr->data[0], addr->data[1], addr->data[2],
+				addr->data[3], addr->data[4], addr->data[5]);
+
+			err = RegSetKeyValueA(hkey, subkey, "NetworkAddress", REG_SZ, buf, strlen(buf));
+			if (err) {
+				printf("  RegSetKeyValueA: %lu\n", err);
+			}
+		}
+	}
+
+	RegCloseKey(hkey);
+
+	if (err) {
+		return ( -1);
+	}
+
+	return (match ? 0 : -1);
+}
+
+#define _com_release(obj) do { if (obj) { obj->lpVtbl->Release(obj); }} while(0)
+
+static int
+_iwbemobj_exec_method(IWbemServices* svc, IWbemClassObject* obj, const wchar_t* funcname)
+{
+	BSTR func = SysAllocString(funcname);
+	HRESULT hr;
+	VARIANT path = { VT_EMPTY };
+	int ret = -1;
+
+	do {
+		if (!func) {
+			break;
+		}
+
+		hr = obj->lpVtbl->Get(obj, L"__PATH", 0, &path, 0, 0);
+		if (FAILED(hr)) {
+			printf("%s: IWbemClassObject::Get", __func__);
+			break;
+		}
+
+		hr = svc->lpVtbl->ExecMethod(svc, V_BSTR(&path), func, 0, NULL, NULL, NULL, NULL);
+		if (FAILED(hr)) {
+			printf("%s: IWbemServices::ExecMethod", __func__);
+			break;
+		}
+
+		ret = 0;
+
+	} while (0);
+
+	SysFreeString(func);
+	return ret;
+}
+
+static int
+_intf_restart(NET_IFINDEX index)
+{
+	char guid[39];
+	wchar_t buf[128];
+	BSTR query = NULL;
+	BSTR resource = NULL;
+	BSTR language = NULL;
+	IWbemLocator* locator = NULL;
+	IWbemServices* services = NULL;
+	IEnumWbemClassObject* results = NULL;
+	IWbemClassObject* result = NULL;
+	int ret = -1;
+	ULONG count;
+	HRESULT hr;
+
+	if (!_intf_get_guid_str(index, guid, ARRAY_SIZE(guid))) {
+		printf("%s: _intf_get_guid_str", __func__);
+		return -1;
+	}
+
+	do {
+		snwprintf(buf, ARRAY_SIZE(buf), L"SELECT * FROM MSFT_NetAdapter WHERE DeviceId='%s'", guid);
+		query = SysAllocString(buf);
+		resource = SysAllocString(L"ROOT\\StandardCimv2");
+		language = SysAllocString(L"WQL");
+
+		if (!query || !resource || !language ) {
+			printf("%s: SysAllocString", __func__);
+			break;
+		}
+
+		hr = CoInitializeEx(0, COINIT_APARTMENTTHREADED);
+		if (FAILED(hr)) {
+			printf("%s: CoInitializeEx", __func__);
+			break;
+		}
+
+		hr = CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT,
+			RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
+		if (FAILED(hr)) {
+			printf("%s: CoInitializeSecurity", __func__);
+			break;
+		}
+
+		hr = CoCreateInstance(&CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, &IID_IWbemLocator,
+			(LPVOID*)&locator);
+		if (FAILED(hr) || !locator) {
+			printf("%s: CoCreateInstance", __func__);
+			break;
+		}
+
+		hr = locator->lpVtbl->ConnectServer(locator, resource, NULL, NULL, NULL, 0, NULL, NULL, &services);
+		if (FAILED(hr) || !services) {
+			printf("%s: IWbemLocator::ConnectServer", __func__);
+			break;
+		}
+
+		hr = services->lpVtbl->ExecQuery(services, language, query, WBEM_FLAG_BIDIRECTIONAL, NULL, &results);
+		if (FAILED(hr) || !results) {
+			printf("%s: IWbemServices::ExecQuery", __func__);
+			break;
+		}
+
+		hr = results->lpVtbl->Next(results, WBEM_INFINITE, 1, &result, &count);
+		if (FAILED(hr) || !result) {
+			printf("%s: IEnumWbemClassObject::Next", __func__);
+			break;
+		}
+
+		ret = _iwbemobj_exec_method(services, result, L"Restart");
+		result->lpVtbl->Release(result);
+	} while (0);
+
+	_com_release(results);
+	_com_release(services);
+	_com_release(locator);
+
+	CoUninitialize();
+
+	SysFreeString(language);
+	SysFreeString(resource);
+	SysFreeString(query);
+
+	return ret;
+}
+
+static int
+_intf_loop_ipaddrs(const struct intf_entry* entry, u_short type, int (*callback)(const struct addr*, u_int))
 {
 	const struct addr* addr;
 	int ret;
@@ -137,11 +372,15 @@ _intf_loop_ipaddrs(const struct intf_entry* entry, int (*callback)(const struct 
 	addr = &entry->intf_addr;
 
 	do {
-		if (addr->addr_type != ADDR_TYPE_NONE) {
-			ret = callback(addr, entry->intf_index);
-			if (ret < 0) {
-				return ret;
-			}
+		if (addr->addr_type == ADDR_TYPE_NONE) {
+			continue;
+		} else if (type && type != addr->addr_type) {
+			continue;
+		}
+
+		ret = callback(addr, entry->intf_index);
+		if (ret < 0) {
+			return ret;
 		}
 
 		addr = &entry->intf_alias_addrs[i];
@@ -321,12 +560,22 @@ _find_ifindex(intf_t *intf, const char *device)
 	return (ret);
 }
 
+static u_int
+_entry_to_ifindex(intf_t* intf, const struct intf_entry* entry)
+{
+	if (entry->intf_name[0]) {
+		return _find_ifindex(intf, entry->intf_name);
+	}
+
+	return entry->intf_index;
+}
+
 static int
-_ifindex_to_entry(intf_t* intf, NET_IFINDEX index, struct intf_entry* entry)
+_ifindex_to_entry(intf_t* intf, struct intf_entry* entry)
 {
 	MIB_IF_ROW2 ifrow;
 
-	_set_ifindex(index, &ifrow);
+	_set_ifindex(entry->intf_index, &ifrow);
 
 	if (GetIfEntry2(&ifrow) != NO_ERROR) {
 		return (-1);
@@ -335,19 +584,6 @@ _ifindex_to_entry(intf_t* intf, NET_IFINDEX index, struct intf_entry* entry)
 	_ifrow2_to_entry(intf, &ifrow, entry);
 
 	return (0);
-}
-
-static int
-_entry_to_ipinterface(intf_t* intf, const struct intf_entry* entry, MIB_IPINTERFACE_ROW* row)
-{
-	NET_IFINDEX index = _find_ifindex(intf, entry->intf_name);
-
-	_set_ifindex(index, row);
-	if (GetIpInterfaceEntry(row) != NO_ERROR) {
-		return (-1);
-	}
-
-	return 0;
 }
 
 static int
@@ -371,52 +607,32 @@ static int
 _intf_add_unicast_addr(const struct addr* addr, u_int index)
 {
 	MIB_UNICASTIPADDRESS_ROW row;
+	DWORD err;
 
 	if (_addr_to_unicastaddr(addr, index, &row) < 0) {
-		//errno = EINVAL;
-		return (-1);
-	} 
-
-	if (CreateUnicastIpAddressEntry(&row) != NO_ERROR) {
+		errno = EINVAL;
 		return (-1);
 	}
 
-	return (0);
-}
+	err = CreateUnicastIpAddressEntry(&row);
 
-static int
-_intf_add_unicast_addrs(intf_t* intf, const struct intf_entry* entry)
-{
-	MIB_IPINTERFACE_ROW row;
-	ULONG dad_transmits_orig;
-	int ret;
-
-	if (_entry_to_ipinterface(intf, entry, &row) < 0) {
-		return (-1);
+	if (err) {
+		if (err == ERROR_OBJECT_ALREADY_EXISTS) {
+			errno = EEXIST;
+		}
+		else if (err == ERROR_ACCESS_DENIED) {
+			errno = EACCES;
+		}
+		else {
+			errno = EINVAL;
+		}
 	}
 
-	/* The address added by CreateUnicastIpAddressEntry isn't immediately
-	 * available for use, due to Windows' Duplicate Address Detection (DAD).
-	 *
-	 * The docs recommend pausing "for one to three seconds" (!) after calling
-	 * CreateUnicastIpAddressEntry, before checking the DAD status[1]. This
-	 * is unacceptably long, so we temporarily disable DAD by setting
-	 * DadTransmits to 0 (ignoring potential errors from SetIpInterfaceEntry).
-	 *
-	 * [1] https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createunicastipaddressentry
-	 */
+	if (err) {
+		printf("%s: CreateUnicastIpAddressEntry(%s)=%lu", __func__, addr_ntoa(addr), err);
+	}
 
-	dad_transmits_orig = row.DadTransmits;
-
-	row.DadTransmits = 0;
-	SetIpInterfaceEntry(&row);
-
-	ret = _intf_loop_ipaddrs(entry, _intf_add_unicast_addr);
-
-	row.DadTransmits = dad_transmits_orig;
-	SetIpInterfaceEntry(&row);
-
-	return (ret);
+	return (err ? -1 : 0);
 }
 
 intf_t *
@@ -428,18 +644,14 @@ intf_open(void)
 int
 intf_get(intf_t* intf, struct intf_entry* entry)
 {
-	NET_IFINDEX idx;
-
 	if (_refresh_tables(intf) < 0)
 		return (-1);
-	
-	if (entry->intf_name[0]) {
-		idx = _find_ifindex(intf, entry->intf_name);
-	} else {
-		idx = entry->intf_index;
+
+	if (!entry->intf_index) {
+		entry->intf_index = _entry_to_ifindex(intf, entry);
 	}
 
-	return _ifindex_to_entry(intf, idx, entry);
+	return _ifindex_to_entry(intf, entry);
 }
 
 int
@@ -454,7 +666,8 @@ intf_get_src(intf_t* intf, struct intf_entry* entry, struct addr* src)
 	for (i = 0; i < intf->addrs->NumEntries; i++) {
 		_unicastaddr_to_addr(&intf->addrs->Table[i], &addr);
 		if (!addr_cmp(src, &addr)) {
-			return _ifindex_to_entry(intf, intf->addrs->Table[i].InterfaceIndex, entry);
+			entry->intf_index = intf->addrs->Table[i].InterfaceIndex;
+			return _ifindex_to_entry(intf, entry);
 		}
 	}
 	errno = ENXIO;
@@ -475,7 +688,8 @@ intf_get_dst(intf_t* intf, struct intf_entry* entry, struct addr* dst)
 		return (-1);
 	}
 
-	return _ifindex_to_entry(intf, index, entry);
+	entry->intf_index = index;
+	return _ifindex_to_entry(intf, entry);
 }
 
 int
@@ -485,36 +699,82 @@ intf_set(intf_t* intf, const struct intf_entry* entry)
 	MIB_IFROW ifrow1;
 	MIB_IF_ROW2 ifrow2;
 	NET_IFINDEX index;
+	ULONG dad_transmits_orig;
+	DWORD err;
 	int i;
 
 	if (_refresh_tables(intf) < 0) {
 		return (-1);
 	}
 
-	index = _find_ifindex(intf, entry->intf_name);
+	index = _entry_to_ifindex(intf, entry);
 	if (!index) {
+		errno = ENXIO;
 		return (-1);
 	}
 
-	/* Delete all existing (unicast) addrs. */
-	if (_intf_loop_ipaddrs(entry, _intf_delete_unicast_addr) < 0) {
+	/* Set the hardware address first, so _intf_restart doesn't mess up our other changes. */
+	if (entry->intf_link_addr.addr_type == ADDR_TYPE_ETH) {
+		if (memcmp(&entry->intf_link_addr.addr_eth, &ifrow2.PhysicalAddress, ETH_ADDR_LEN) != 0) {
+			if (_intf_set_link_addr(index, &entry->intf_link_addr.addr_eth) < 0) {
+				return (-1);
+			}
+
+			if (_intf_restart(index) < 0) {
+				return (-1);
+			}
+		}
+	}
+
+	/* Delete all existing (unicast) addrs. ADDR_TYPE_NONE means "all" here. */
+	if (_intf_loop_ipaddrs(entry, ADDR_TYPE_NONE, _intf_delete_unicast_addr) < 0) {
+		printf("%s: _intf_loop_ipaddrs\n", __func__);
 		return (-1);
 	}
 
-	/* Add all addrs from entry. */
-	if (_intf_add_unicast_addrs(intf, entry) < 0) {
-		return (-1);
-	}
-
-	/* Begin Get/SetIpInterfaceEntry. Options are set separately for AF_INET and AF_INET6. */
+	/* Get/SetIpInterfaceEntry options are set separately for AF_INET and AF_INET6. */
 
 	for (i = 0; i < 2; ++i) {
 		_set_ifindex(index, &iprow);
 		iprow.Family = i ? AF_INET6 : AF_INET;
 
 		if (GetIpInterfaceEntry(&iprow) != NO_ERROR) {
+			printf("%s: GetIpInterfaceEntry\n", __func__);
 			return (-1);
 		}
+
+		/* The address added by CreateUnicastIpAddressEntry isn't immediately
+		 * available for use, due to Windows' Duplicate Address Detection (DAD).
+		 *
+		 * The docs recommend pausing "for one to three seconds" (!) after calling
+		 * CreateUnicastIpAddressEntry, before checking the DAD status[1]. This
+		 * is unacceptably long, so we temporarily disable DAD by setting
+		 * DadTransmits to 0 (ignoring potential errors from SetIpInterfaceEntry).
+		 *
+		 * [1] https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-createunicastipaddressentry
+		 */
+
+		dad_transmits_orig = iprow.DadTransmits;
+		iprow.DadTransmits = 0;
+
+		if (!i) {
+			// must be 0 for IPv4 (but isn't set as such)
+			iprow.SitePrefixLength = 0;
+		}
+
+		if ((err = SetIpInterfaceEntry(&iprow)) != NO_ERROR) {
+			printf("%s: SetIpInterfaceEntry 1: %lu\n", __func__, err);
+			return (-1);
+		}
+
+		/* Add IPv4/IPv6 addresses from entry */
+		if (_intf_loop_ipaddrs(entry, i ? ADDR_TYPE_IP6 : ADDR_TYPE_IP, _intf_add_unicast_addr) < 0) {
+			printf("%s: _intf_loop_ipaddrs(..., _intf_add_unicast_addr)\n", __func__);
+			return (-1);
+		}
+
+		/* Restore DadTransmits (see above) */
+		iprow.DadTransmits = dad_transmits_orig;
 
 		/* Set interface MTU. */
 		if (entry->intf_mtu != 0) {
@@ -522,6 +782,7 @@ intf_set(intf_t* intf, const struct intf_entry* entry)
 		}
 
 		if (SetIpInterfaceEntry(&iprow) != NO_ERROR) {
+			printf("%s: SetIpInterfaceEntry 2\n", __func__);
 			return (-1);
 		}
 	}
@@ -530,17 +791,8 @@ intf_set(intf_t* intf, const struct intf_entry* entry)
 
 	_set_ifindex(index, &ifrow2);
 	if (GetIfEntry2(&ifrow2) != NO_ERROR) {
+		printf("%s: GetIfEntry2\n", __func__);
 		return (-1);
-	}
-
-	/* Set hardware address. */
-	if (entry->intf_link_addr.addr_type == ADDR_TYPE_ETH) {
-		if (memcmp(&entry->intf_link_addr.addr_eth, &ifrow2.PhysicalAddress, ETH_ADDR_LEN) != 0) {
-			/* XXX - not yet implemented. We'd have to modify the registry for that */
-			errno = ENOSYS;
-			SetLastError(ERROR_NOT_SUPPORTED);
-			return (-1);
-		}
 	}
 
 	/* Set point-to-point destination. */

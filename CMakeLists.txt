@@ -337,7 +337,7 @@ set_target_properties(
 )
 
 if (WIN32)
-    target_link_libraries(${PROJECT_NAME} PUBLIC Iphlpapi ws2_32)
+    target_link_libraries(${PROJECT_NAME} PUBLIC Iphlpapi ws2_32 ole32 oleaut32 wbemuuid)
     if (HAVE_PACKET32_H)
         target_include_directories(${PROJECT_NAME} PUBLIC  ${NPCAP_SDK_INCLUDE})
         target_link_directories(${PROJECT_NAME} PUBLIC ${NPCAP_SDK}/Libs/)
