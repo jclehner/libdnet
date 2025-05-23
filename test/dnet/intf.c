@@ -27,8 +27,8 @@ static void
 usage(void)
 {
 	fprintf(stderr, "Usage: dnet intf show\n"
-	    "       dnet intf get [<name>|<index>]\n"
-	    "       dnet intf set <name> "
+	    "       dnet intf get <name>|<index>\n"
+	    "       dnet intf set <name>|<index> "
 	    "[alias|dst|inet|link <addr> ...] [up|down|arp|noarp ...]\n"
 	    "       dnet intf src <ip>\n"
 	    "       dnet intf dst <ip>\n"
